@@ -64,9 +64,17 @@ struct Opt {
     #[clap(long, default_value = "basic")]
     mode: String,
 
-    /// 显示 payload 的最大字节数（用于 hex/text 模式）
+    /// 显示 payload 的最大字节数（用于 hex/text 模式，最大512）
     #[clap(long, default_value = "128")]
     payload_bytes: usize,
+
+    /// 捕获完整 payload（512字节），忽略 --payload-bytes 设置
+    #[clap(long)]
+    payload_full: bool,
+
+    /// 分页显示，每页显示的行数（用于 hex 模式）
+    #[clap(long, default_value = "0")]
+    page_lines: usize,
 
     /// 显示调试信息
     #[clap(long)]
@@ -242,6 +250,71 @@ fn format_hex_dump(payload: &[u8], bytes_to_show: usize) -> String {
             }
         }
         output.push('\n');
+    }
+
+    output
+}
+
+/// 十六进制转储（带分页）
+fn format_hex_dump_paged(payload: &[u8], bytes_to_show: usize, page_lines: usize) -> String {
+    let mut output = String::new();
+    let bytes_to_show = core::cmp::min(bytes_to_show, payload.len());
+
+    if page_lines == 0 {
+        // 不分页，显示全部
+        return format_hex_dump(payload, bytes_to_show);
+    }
+
+    let total_lines = (bytes_to_show + 15) / 16;
+    let pages = (total_lines + page_lines - 1) / page_lines;
+
+    for page in 0..pages {
+        let start_line = page * page_lines;
+        let end_line = core::cmp::min((page + 1) * page_lines, total_lines);
+        let start_byte = start_line * 16;
+        let end_byte = core::cmp::min(end_line * 16, bytes_to_show);
+
+        output.push_str(&format!("--- 页 {} ({}-{} 字节) ---\n", page + 1, start_byte, end_byte - 1));
+
+        for line in start_line..end_line {
+            let line_start = line * 16;
+            let line_end = core::cmp::min(line_start + 16, bytes_to_show);
+            let chunk = &payload[line_start..line_end];
+
+            output.push_str(&format!("{:04x}: ", line_start));
+
+            // 十六进制部分
+            for (j, byte) in chunk.iter().enumerate() {
+                output.push_str(&format!("{:02x} ", byte));
+                if j == 7 {
+                    output.push(' ');
+                }
+            }
+
+            // 填充空格
+            for j in chunk.len()..16 {
+                output.push_str("   ");
+                if j == 7 {
+                    output.push(' ');
+                }
+            }
+
+            output.push_str("  ");
+
+            // ASCII 部分
+            for byte in chunk {
+                if byte.is_ascii_graphic() || *byte == b' ' {
+                    output.push(*byte as char);
+                } else {
+                    output.push('.');
+                }
+            }
+            output.push('\n');
+        }
+
+        if page < pages - 1 {
+            output.push('\n');
+        }
     }
 
     output
@@ -477,25 +550,47 @@ fn format_json(event: &NetworkEvent) -> String {
 }
 
 /// 根据显示模式格式化事件
-fn format_event_with_mode(event: &NetworkEvent, mode: DisplayMode, payload_bytes: usize) -> String {
+fn format_event_with_mode(
+    event: &NetworkEvent,
+    mode: DisplayMode,
+    payload_bytes: usize,
+    payload_full: bool,
+    page_lines: usize,
+) -> String {
+    // 确定 payload 显示大小
+    let effective_bytes = if payload_full {
+        event.payload_len as usize
+    } else {
+        core::cmp::min(payload_bytes, event.payload_len as usize)
+    };
+
     match mode {
         DisplayMode::Basic => format_event(event),
         DisplayMode::Hex => {
             let mut output = format_event(event);
-            output.push_str(&format!("\nPayload ({} bytes):\n", event.payload_len));
-            output.push_str(&format_hex_dump(
-                &event.payload[..event.payload_len as usize],
-                payload_bytes
-            ));
+            output.push_str(&format!("\nPayload ({} bytes, 显示 {} bytes):\n", event.payload_len, effective_bytes));
+
+            // 根据是否分页选择格式化函数
+            if page_lines > 0 && effective_bytes > page_lines * 16 {
+                output.push_str(&format_hex_dump_paged(
+                    &event.payload[..event.payload_len as usize],
+                    effective_bytes,
+                    page_lines,
+                ));
+            } else {
+                output.push_str(&format_hex_dump(
+                    &event.payload[..event.payload_len as usize],
+                    effective_bytes,
+                ));
+            }
             output
         }
         DisplayMode::Text => {
             let mut output = format_event(event);
             if event.payload_len > 0 {
                 output.push_str("\nContent:\n");
-                output.push_str(&format_text_payload(
-                    &event.payload[..event.payload_len as usize]
-                ));
+                let bytes = &event.payload[..effective_bytes];
+                output.push_str(&format_text_payload(bytes));
             }
             output
         }
@@ -537,7 +632,14 @@ async fn main() -> anyhow::Result<()> {
         info!("  目标端口: {}", port);
     }
     if opt.mode != "basic" {
-        info!("  Payload 显示: {} 字节", opt.payload_bytes);
+        if opt.payload_full {
+            info!("  Payload 显示: 完整 (192 字节)");
+        } else {
+            info!("  Payload 显示: {} 字节", opt.payload_bytes);
+        }
+        if opt.page_lines > 0 {
+            info!("  分页显示: 每页 {} 行", opt.page_lines);
+        }
     }
     info!("═══════════════════════════════════════");
     info!("");
@@ -592,6 +694,8 @@ async fn main() -> anyhow::Result<()> {
         let filter_clone = filter.clone();
         let display_mode_clone = display_mode;
         let payload_bytes_clone = opt.payload_bytes;
+        let payload_full_clone = opt.payload_full;
+        let page_lines_clone = opt.page_lines;
         let opt_clone = opt.clone(); // Clone for debug use
 
         let handle = task::spawn(async move {
@@ -640,7 +744,9 @@ async fn main() -> anyhow::Result<()> {
                                             let output = format_event_with_mode(
                                                 &network_event,
                                                 display_mode_clone,
-                                                payload_bytes_clone
+                                                payload_bytes_clone,
+                                                payload_full_clone,
+                                                page_lines_clone
                                             );
                                             println!("{}", output);
 

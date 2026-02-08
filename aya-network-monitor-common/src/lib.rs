@@ -67,8 +67,8 @@ pub const IPPROTO_ICMP: u8 = 1;
 // 以太网类型
 pub const ETH_P_IP: u16 = 0x0800;
 
-// Payload 大小限制（考虑 eBPF 栈大小 512 字节）
-pub const MAX_PAYLOAD_SIZE: usize = 128;
+// Payload 大小限制（考虑 eBPF 栈大小限制和其他栈变量）
+pub const MAX_PAYLOAD_SIZE: usize = 192;
 
 // 网络事件（通过 Perf Event Array 发送到用户空间）
 #[derive(Debug, Clone, Copy)]
@@ -81,8 +81,7 @@ pub struct NetworkEvent {
     pub dst_port: u16,          // 目标端口（网络字节序）
     pub packet_size: u32,       // 包大小
     pub tcp_flags: u8,          // TCP 标志位（仅 TCP 有效）
-    pub payload_len: u8,        // 实际捕获的 payload 长度
-    pub _pad: [u8; 2],
+    pub payload_len: u16,       // 实际捕获的 payload 长度（改为 u16 支持更大的值）
     pub payload: [u8; MAX_PAYLOAD_SIZE],  // 数据包内容
 }
 

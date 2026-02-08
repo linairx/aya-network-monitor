@@ -79,7 +79,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
             // 捕获 payload（使用 eBPF 友好的方式）
             let mut payload = [0u8; MAX_PAYLOAD_SIZE];
-            let mut payload_len = 0u8;
+            let mut payload_len = 0u16;
 
             // 检查是否有 payload 可用
             if (payload_ptr as usize) < (data_end as usize) {
@@ -101,7 +101,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                     payload[i] = byte;
                     i += 1;
                 }
-                payload_len = i as u8;
+                payload_len = i as u16;
             }
 
             // 创建网络事件并通过 Perf Event Array 发送
@@ -114,7 +114,6 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                 packet_size: size as u32,
                 tcp_flags: tcp_hdr.flags,
                 payload_len,
-                _pad: [0; 2],
                 payload,
             };
 
@@ -136,7 +135,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
             // 捕获 payload（使用 eBPF 友好的方式）
             let mut payload = [0u8; MAX_PAYLOAD_SIZE];
-            let mut payload_len = 0u8;
+            let mut payload_len = 0u16;
 
             // 检查是否有 payload 可用
             if (payload_ptr as usize) < (data_end as usize) {
@@ -158,7 +157,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                     payload[i] = byte;
                     i += 1;
                 }
-                payload_len = i as u8;
+                payload_len = i as u16;
             }
 
             // 创建网络事件并通过 Perf Event Array 发送
@@ -171,7 +170,6 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                 packet_size: size as u32,
                 tcp_flags: 0,
                 payload_len,
-                _pad: [0; 2],
                 payload,
             };
 
@@ -193,7 +191,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
             // 捕获 payload（使用 eBPF 友好的方式）
             let mut payload = [0u8; MAX_PAYLOAD_SIZE];
-            let mut payload_len = 0u8;
+            let mut payload_len = 0u16;
 
             // 检查是否有 payload 可用
             if (payload_ptr as usize) < (data_end as usize) {
@@ -215,7 +213,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                     payload[i] = byte;
                     i += 1;
                 }
-                payload_len = i as u8;
+                payload_len = i as u16;
             }
 
             // 创建网络事件并通过 Perf Event Array 发送
@@ -228,7 +226,6 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                 packet_size: size as u32,
                 tcp_flags: 0,
                 payload_len,
-                _pad: [0; 2],
                 payload,
             };
 
