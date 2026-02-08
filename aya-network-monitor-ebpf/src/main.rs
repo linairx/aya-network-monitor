@@ -77,21 +77,31 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             let tcp_hdr_len = ((tcp_hdr.data_off >> 4) as u8) * 4;
             let payload_ptr = (tcp_hdr_ptr as usize + tcp_hdr_len as usize) as *const u8;
 
-            // 捕获 payload
+            // 捕获 payload（使用 eBPF 友好的方式）
             let mut payload = [0u8; MAX_PAYLOAD_SIZE];
             let mut payload_len = 0u8;
 
-            if payload_ptr as usize <= data_end as usize {
+            // 检查是否有 payload 可用
+            if (payload_ptr as usize) < (data_end as usize) {
                 let available = (data_end as usize - payload_ptr as usize) as usize;
                 let to_copy = core::cmp::min(available, MAX_PAYLOAD_SIZE);
 
-                // 使用 Ptr::copy_nonoverlapping 复制数据
-                if to_copy > 0 {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), to_copy);
+                // 手动复制，避免 eBPF 验证器问题
+                let mut i = 0usize;
+                loop {
+                    if i >= to_copy {
+                        break;
                     }
-                    payload_len = to_copy as u8;
+                    let src_ptr = unsafe { payload_ptr.add(i) };
+                    // 确保不会越界
+                    if src_ptr as usize >= data_end as usize {
+                        break;
+                    }
+                    let byte = unsafe { *src_ptr };
+                    payload[i] = byte;
+                    i += 1;
                 }
+                payload_len = i as u8;
             }
 
             // 创建网络事件并通过 Perf Event Array 发送
@@ -124,21 +134,31 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             // 计算 UDP payload 的起始位置
             let payload_ptr = (udp_hdr_ptr as usize + core::mem::size_of::<UdpHdr>()) as *const u8;
 
-            // 捕获 payload
+            // 捕获 payload（使用 eBPF 友好的方式）
             let mut payload = [0u8; MAX_PAYLOAD_SIZE];
             let mut payload_len = 0u8;
 
-            if payload_ptr as usize <= data_end as usize {
+            // 检查是否有 payload 可用
+            if (payload_ptr as usize) < (data_end as usize) {
                 let available = (data_end as usize - payload_ptr as usize) as usize;
                 let to_copy = core::cmp::min(available, MAX_PAYLOAD_SIZE);
 
-                // 使用 Ptr::copy_nonoverlapping 复制数据
-                if to_copy > 0 {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), to_copy);
+                // 手动复制，避免 eBPF 验证器问题
+                let mut i = 0usize;
+                loop {
+                    if i >= to_copy {
+                        break;
                     }
-                    payload_len = to_copy as u8;
+                    let src_ptr = unsafe { payload_ptr.add(i) };
+                    // 确保不会越界
+                    if src_ptr as usize >= data_end as usize {
+                        break;
+                    }
+                    let byte = unsafe { *src_ptr };
+                    payload[i] = byte;
+                    i += 1;
                 }
+                payload_len = i as u8;
             }
 
             // 创建网络事件并通过 Perf Event Array 发送
@@ -171,21 +191,31 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             // 计算 ICMP payload 的起始位置
             let payload_ptr = (icmp_hdr_ptr as usize + core::mem::size_of::<IcmpHdr>()) as *const u8;
 
-            // 捕获 payload
+            // 捕获 payload（使用 eBPF 友好的方式）
             let mut payload = [0u8; MAX_PAYLOAD_SIZE];
             let mut payload_len = 0u8;
 
-            if payload_ptr as usize <= data_end as usize {
+            // 检查是否有 payload 可用
+            if (payload_ptr as usize) < (data_end as usize) {
                 let available = (data_end as usize - payload_ptr as usize) as usize;
                 let to_copy = core::cmp::min(available, MAX_PAYLOAD_SIZE);
 
-                // 使用 Ptr::copy_nonoverlapping 复制数据
-                if to_copy > 0 {
-                    unsafe {
-                        core::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), to_copy);
+                // 手动复制，避免 eBPF 验证器问题
+                let mut i = 0usize;
+                loop {
+                    if i >= to_copy {
+                        break;
                     }
-                    payload_len = to_copy as u8;
+                    let src_ptr = unsafe { payload_ptr.add(i) };
+                    // 确保不会越界
+                    if src_ptr as usize >= data_end as usize {
+                        break;
+                    }
+                    let byte = unsafe { *src_ptr };
+                    payload[i] = byte;
+                    i += 1;
                 }
+                payload_len = i as u8;
             }
 
             // 创建网络事件并通过 Perf Event Array 发送
