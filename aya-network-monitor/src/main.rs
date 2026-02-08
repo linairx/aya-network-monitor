@@ -29,7 +29,7 @@ pub enum DisplayMode {
     Json,
 }
 
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Clone)]
 #[command(author, version, about, long_about = None)]
 struct Opt {
     /// 网络接口名称
@@ -67,6 +67,10 @@ struct Opt {
     /// 显示 payload 的最大字节数（用于 hex/text 模式）
     #[clap(long, default_value = "128")]
     payload_bytes: usize,
+
+    /// 显示调试信息
+    #[clap(long)]
+    debug: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -588,6 +592,7 @@ async fn main() -> anyhow::Result<()> {
         let filter_clone = filter.clone();
         let display_mode_clone = display_mode;
         let payload_bytes_clone = opt.payload_bytes;
+        let opt_clone = opt.clone(); // Clone for debug use
 
         let handle = task::spawn(async move {
             let mut counters = std::collections::HashMap::new();
@@ -612,6 +617,20 @@ async fn main() -> anyhow::Result<()> {
                                         };
 
                                         total += 1;
+
+                                        // 调试输出（如果启用）
+                                        if opt_clone.debug {
+                                            eprintln!("[DEBUG] Total events: {}", total);
+                                            eprintln!("[DEBUG] Event: {}:{} -> {}:{} ({}b)",
+                                                format_ip(network_event.src_ip),
+                                                u16::from_be(network_event.src_port),
+                                                format_ip(network_event.dst_ip),
+                                                u16::from_be(network_event.dst_port),
+                                                network_event.packet_size
+                                            );
+                                            eprintln!("[DEBUG] Filter: src_port={:?}, dst_port={:?}",
+                                                filter_clone.src_port, filter_clone.dst_port);
+                                        }
 
                                         // 应用过滤
                                         if filter_clone.matches(&network_event) {
