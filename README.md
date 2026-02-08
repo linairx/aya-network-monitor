@@ -9,6 +9,9 @@
 - 🎯 **灵活过滤**：在用户空间使用 Rust 实现强大的过滤逻辑
 - 🔄 **实时监控**：通过 Perf Event Array 高效传输数据
 - ⚡ **零拷贝**：二进制数据传输，避免文本解析开销
+- 🔍 **内容捕获**：5 种显示模式，支持查看数据包内容（hex、文本、协议解析）
+- 📡 **协议解析**：自动识别 HTTP、DNS 等常见协议
+- 🌐 **Web 友好**：JSON 输出模式，便于前端集成（Leptos/Vue/React）
 
 ## 架构
 
@@ -113,6 +116,39 @@ sudo ./target/release/aya-network-monitor -i ens18 \
   --protocol tcp \
   --src-ip 192.168.1.100 \
   --dst-port 22
+```
+
+### 查看数据包内容
+
+📖 详细说明请参考 [PAYLOAD.md](PAYLOAD.md)
+
+**基础模式（默认）：**
+```bash
+sudo ./target/release/aya-network-monitor -i ens18
+```
+
+**十六进制模式（hex dump + ASCII）：**
+```bash
+sudo ./target/release/aya-network-monitor -i ens18 --mode hex
+```
+
+**文本模式（智能检测可读内容）：**
+```bash
+sudo ./target/release/aya-network-monitor -i ens18 --mode text
+```
+
+**协议模式（解析 HTTP、DNS）：**
+```bash
+# 查看 HTTP 请求
+sudo ./target/release/aya-network-monitor -i ens18 --mode protocol --dst-port 80
+
+# 查看 DNS 查询
+sudo ./target/release/aya-network-monitor -i ens18 --mode protocol --dst-port 53
+```
+
+**JSON 模式（Web 界面集成）：**
+```bash
+sudo ./target/release/aya-network-monitor -i ens18 --mode json > traffic.json
 ```
 
 ### 查看所有选项

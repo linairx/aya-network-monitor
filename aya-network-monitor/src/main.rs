@@ -5,12 +5,29 @@ use aya::{
     util::online_cpus,
     Ebpf,
 };
-use aya_network_monitor_common::NetworkEvent;
+use aya_network_monitor_common::{NetworkEvent, MAX_PAYLOAD_SIZE};
 use bytes::BytesMut;
 use clap::Parser;
 use log::{debug, info, warn};
+use serde::Serialize;
 use std::net::Ipv4Addr;
 use tokio::{signal, task};
+
+/// 显示模式
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DisplayMode {
+    /// 基础模式：只显示头部信息
+    #[default]
+    Basic,
+    /// 十六进制模式：显示 hex dump + ASCII
+    Hex,
+    /// 文本模式：智能文本检测
+    Text,
+    /// 协议模式：解析常见协议
+    Protocol,
+    /// JSON 模式：为 Web 界面提供结构化数据
+    Json,
+}
 
 #[derive(Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -39,9 +56,13 @@ struct Opt {
     #[clap(long)]
     dst_port: Option<u16>,
 
-    /// 显示统计信息
-    #[clap(long)]
-    stats: bool,
+    /// 显示模式：basic, hex, text, protocol, json
+    #[clap(long, default_value = "basic")]
+    mode: String,
+
+    /// 显示 payload 的最大字节数（用于 hex/text 模式）
+    #[clap(long, default_value = "128")]
+    payload_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +185,317 @@ fn format_event(event: &NetworkEvent) -> String {
     }
 }
 
+// ========== 显示模式相关函数 ==========
+
+/// 解析显示模式
+fn parse_display_mode(mode: &str) -> DisplayMode {
+    match mode.to_lowercase().as_str() {
+        "hex" => DisplayMode::Hex,
+        "text" => DisplayMode::Text,
+        "protocol" => DisplayMode::Protocol,
+        "json" => DisplayMode::Json,
+        "basic" | _ => DisplayMode::Basic,
+    }
+}
+
+/// 十六进制转储
+fn format_hex_dump(payload: &[u8], bytes_to_show: usize) -> String {
+    let mut output = String::new();
+    let bytes_to_show = core::cmp::min(bytes_to_show, payload.len());
+
+    for (i, chunk) in payload[..bytes_to_show].chunks(16).enumerate() {
+        let offset = i * 16;
+        output.push_str(&format!("{:04x}: ", offset));
+
+        // 十六进制部分
+        for (j, byte) in chunk.iter().enumerate() {
+            output.push_str(&format!("{:02x} ", byte));
+            if j == 7 {
+                output.push(' ');
+            }
+        }
+
+        // 填充空格
+        for j in chunk.len()..16 {
+            output.push_str("   ");
+            if j == 7 {
+                output.push(' ');
+            }
+        }
+
+        output.push_str("  ");
+
+        // ASCII 部分
+        for byte in chunk {
+            if byte.is_ascii_graphic() || *byte == b' ' {
+                output.push(*byte as char);
+            } else {
+                output.push('.');
+            }
+        }
+        output.push('\n');
+    }
+
+    output
+}
+
+/// 检测并显示文本内容
+fn format_text_payload(payload: &[u8]) -> String {
+    // 检查是否主要是可打印 ASCII
+    let printable_count = payload.iter()
+        .filter(|&&b| b.is_ascii_graphic() || b.is_ascii_whitespace())
+        .count();
+
+    let ratio = printable_count as f64 / payload.len() as f64;
+
+    // 如果超过 80% 是可打印字符，显示为文本
+    if ratio > 0.8 && payload.len() > 0 {
+        let text = String::from_utf8_lossy(payload);
+        return text.lines()
+            .take(10) // 最多显示 10 行
+            .map(|line| format!("  {}", line))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    // 否则显示十六进制
+    format_hex_dump(payload, payload.len())
+}
+
+/// 解析 HTTP 请求
+fn parse_http(payload: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(payload);
+    let lines: Vec<&str> = text.lines().collect();
+
+    if lines.is_empty() {
+        return None;
+    }
+
+    let first_line = lines[0].trim();
+
+    // 检查是否是 HTTP 请求
+    if first_line.starts_with("GET ") || first_line.starts_with("POST ") ||
+       first_line.starts_with("PUT ") || first_line.starts_with("DELETE ") ||
+       first_line.starts_with("HEAD ") || first_line.starts_with("OPTIONS ") ||
+       first_line.starts_with("PATCH ") {
+        let mut output = String::from("HTTP Request:\n");
+        output.push_str(&format!("  {}\n", first_line));
+
+        // 解析头部
+        for line in lines.iter().skip(1).take(20) {
+            let line = line.trim();
+            if line.is_empty() {
+                break;
+            }
+            output.push_str(&format!("  {}\n", line));
+        }
+
+        return Some(output);
+    }
+
+    // 检查是否是 HTTP 响应
+    if first_line.starts_with("HTTP/") {
+        let mut output = String::from("HTTP Response:\n");
+        output.push_str(&format!("  {}\n", first_line));
+
+        for line in lines.iter().skip(1).take(20) {
+            let line = line.trim();
+            if line.is_empty() {
+                break;
+            }
+            output.push_str(&format!("  {}\n", line));
+        }
+
+        return Some(output);
+    }
+
+    None
+}
+
+/// 解析 DNS 查询/响应
+fn parse_dns(payload: &[u8]) -> Option<String> {
+    if payload.len() < 12 {
+        return None;
+    }
+
+    let flags = u16::from_be_bytes([payload[2], payload[3]]);
+    let is_response = (flags & 0x8000) != 0;
+    let question_count = u16::from_be_bytes([payload[4], payload[5]]) as usize;
+
+    let mut output = String::new();
+    output.push_str(if is_response { "DNS Response" } else { "DNS Query" });
+    output.push_str(&format!(" ({} questions)\n", question_count));
+
+    // 简单的域名解析（跳过复杂的压缩指针处理）
+    let mut pos = 12;
+    for i in 0..question_count {
+        if pos >= payload.len() {
+            break;
+        }
+
+        output.push_str(&format!("  Query {}: ", i + 1));
+
+        // 解析域名
+        let mut domain = String::new();
+        loop {
+            if pos >= payload.len() {
+                break;
+            }
+            let len = payload[pos] as usize;
+            pos += 1;
+            if len == 0 {
+                break;
+            }
+            if pos + len > payload.len() {
+                break;
+            }
+            if !domain.is_empty() {
+                domain.push('.');
+            }
+            let label = String::from_utf8_lossy(&payload[pos..pos + len]);
+            domain.push_str(&label);
+            pos += len;
+        }
+
+        output.push_str(&domain);
+
+        // 跳过 QTYPE 和 QCLASS
+        if pos + 4 > payload.len() {
+            break;
+        }
+        let qtype = u16::from_be_bytes([payload[pos], payload[pos + 1]]);
+        pos += 4;
+
+        let type_str = match qtype {
+            1 => "A",
+            2 => "NS",
+            5 => "CNAME",
+            28 => "AAAA",
+            _ => "UNKNOWN",
+        };
+        output.push_str(&format!(" (type: {})\n", type_str));
+    }
+
+    Some(output)
+}
+
+/// 协议解析
+fn format_protocol_parse(event: &NetworkEvent) -> String {
+    let proto = format_protocol(event.protocol);
+    let src_ip = format_ip(event.src_ip);
+    let dst_ip = format_ip(event.dst_ip);
+
+    let header = match event.protocol {
+        6 | 17 => {
+            format!(
+                "{} {}:{} -> {}:{} ({}b)\n",
+                proto,
+                src_ip,
+                u16::from_be(event.src_port),
+                dst_ip,
+                u16::from_be(event.dst_port),
+                event.packet_size
+            )
+        }
+        _ => {
+            format!(
+                "{} {} -> {} ({}b)\n",
+                proto, src_ip, dst_ip, event.packet_size
+            )
+        }
+    };
+
+    let payload = &event.payload[..event.payload_len as usize];
+
+    // 尝试解析协议
+    if event.protocol == 6 && (u16::from_be(event.dst_port) == 80 || u16::from_be(event.src_port) == 80) {
+        // HTTP
+        if let Some(http) = parse_http(payload) {
+            return format!("{}{}", header, http);
+        }
+    }
+
+    if event.protocol == 17 && (u16::from_be(event.dst_port) == 53 || u16::from_be(event.src_port) == 53) {
+        // DNS
+        if let Some(dns) = parse_dns(payload) {
+            return format!("{}{}", header, dns);
+        }
+    }
+
+    // 无法解析，显示文本或十六进制
+    format!("{}{}", header, format_text_payload(payload))
+}
+
+/// JSON 输出的结构体
+#[derive(Serialize)]
+struct JsonEvent {
+    timestamp: i64,
+    protocol: String,
+    src_ip: String,
+    dst_ip: String,
+    src_port: u16,
+    dst_port: u16,
+    packet_size: u32,
+    tcp_flags: u8,
+    payload_len: usize,
+    payload_hex: String,
+}
+
+/// 转换为 JSON
+fn format_json(event: &NetworkEvent) -> String {
+    let json_event = JsonEvent {
+        timestamp: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64,
+        protocol: format_protocol(event.protocol).to_string(),
+        src_ip: format_ip(event.src_ip),
+        dst_ip: format_ip(event.dst_ip),
+        src_port: u16::from_be(event.src_port),
+        dst_port: u16::from_be(event.dst_port),
+        packet_size: event.packet_size,
+        tcp_flags: event.tcp_flags,
+        payload_len: event.payload_len as usize,
+        payload_hex: {
+            let bytes = &event.payload[..event.payload_len as usize];
+            bytes.iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<Vec<_>>()
+                .join(" ")
+        },
+    };
+
+    serde_json::to_string(&json_event).unwrap_or_else(|_| "{}".to_string())
+}
+
+/// 根据显示模式格式化事件
+fn format_event_with_mode(event: &NetworkEvent, mode: DisplayMode, payload_bytes: usize) -> String {
+    match mode {
+        DisplayMode::Basic => format_event(event),
+        DisplayMode::Hex => {
+            let mut output = format_event(event);
+            output.push_str(&format!("\nPayload ({} bytes):\n", event.payload_len));
+            output.push_str(&format_hex_dump(
+                &event.payload[..event.payload_len as usize],
+                payload_bytes
+            ));
+            output
+        }
+        DisplayMode::Text => {
+            let mut output = format_event(event);
+            if event.payload_len > 0 {
+                output.push_str("\nContent:\n");
+                output.push_str(&format_text_payload(
+                    &event.payload[..event.payload_len as usize]
+                ));
+            }
+            output
+        }
+        DisplayMode::Protocol => format_protocol_parse(event),
+        DisplayMode::Json => format_json(event),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let opt = Opt::parse();
@@ -173,6 +505,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let filter = Filter::from_opt(&opt);
+    let display_mode = parse_display_mode(&opt.mode);
 
     info!("═══════════════════════════════════════");
     info!("     Aya eBPF 网络流量监控工具");
@@ -180,6 +513,7 @@ async fn main() -> anyhow::Result<()> {
     info!("网卡: {}", opt.iface);
     info!("架构: eBPF (内核) → Perf Event → 用户空间 Rust 过滤");
     info!("");
+    info!("显示模式: {}", opt.mode);
     info!("过滤配置:");
     info!("  协议: {}", opt.protocol);
     if let Some(ref ip) = opt.src_ip {
@@ -193,6 +527,9 @@ async fn main() -> anyhow::Result<()> {
     }
     if let Some(port) = opt.dst_port {
         info!("  目标端口: {}", port);
+    }
+    if opt.mode != "basic" {
+        info!("  Payload 显示: {} 字节", opt.payload_bytes);
     }
     info!("═══════════════════════════════════════");
     info!("");
@@ -238,6 +575,8 @@ async fn main() -> anyhow::Result<()> {
         )?;
 
         let filter_clone = filter.clone();
+        let display_mode_clone = display_mode;
+        let payload_bytes_clone = opt.payload_bytes;
 
         let handle = task::spawn(async move {
             let mut counters = std::collections::HashMap::new();
@@ -266,7 +605,14 @@ async fn main() -> anyhow::Result<()> {
                                         // 应用过滤
                                         if filter_clone.matches(&network_event) {
                                             filtered += 1;
-                                            println!("{}", format_event(&network_event));
+
+                                            // 根据显示模式格式化输出
+                                            let output = format_event_with_mode(
+                                                &network_event,
+                                                display_mode_clone,
+                                                payload_bytes_clone
+                                            );
+                                            println!("{}", output);
 
                                             // 统计
                                             *counters.entry(network_event.protocol).or_insert(0) += 1;

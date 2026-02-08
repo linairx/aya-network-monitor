@@ -9,7 +9,7 @@ use aya_ebpf::{
 };
 use aya_network_monitor_common::{
     NetworkEvent, EthHdr, Ipv4Hdr, TcpHdr, UdpHdr, IcmpHdr,
-    ETH_P_IP, IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP,
+    ETH_P_IP, IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP, MAX_PAYLOAD_SIZE,
 };
 
 // Perf Event Array - 用于向用户空间发送结构化网络事件
@@ -73,6 +73,27 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
             let tcp_hdr = unsafe { &*tcp_hdr_ptr };
 
+            // 计算 TCP payload 的起始位置
+            let tcp_hdr_len = ((tcp_hdr.data_off >> 4) as u8) * 4;
+            let payload_ptr = (tcp_hdr_ptr as usize + tcp_hdr_len as usize) as *const u8;
+
+            // 捕获 payload
+            let mut payload = [0u8; MAX_PAYLOAD_SIZE];
+            let mut payload_len = 0u8;
+
+            if payload_ptr as usize <= data_end as usize {
+                let available = (data_end as usize - payload_ptr as usize) as usize;
+                let to_copy = core::cmp::min(available, MAX_PAYLOAD_SIZE);
+
+                // 使用 Ptr::copy_nonoverlapping 复制数据
+                if to_copy > 0 {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), to_copy);
+                    }
+                    payload_len = to_copy as u8;
+                }
+            }
+
             // 创建网络事件并通过 Perf Event Array 发送
             let event = NetworkEvent {
                 protocol: IPPROTO_TCP,
@@ -82,7 +103,9 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                 dst_port: tcp_hdr.dst_port,
                 packet_size: size as u32,
                 tcp_flags: tcp_hdr.flags,
-                _pad: [0; 3],
+                payload_len,
+                _pad: [0; 2],
+                payload,
             };
 
             unsafe {
@@ -98,6 +121,26 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
             let udp_hdr = unsafe { &*udp_hdr_ptr };
 
+            // 计算 UDP payload 的起始位置
+            let payload_ptr = (udp_hdr_ptr as usize + core::mem::size_of::<UdpHdr>()) as *const u8;
+
+            // 捕获 payload
+            let mut payload = [0u8; MAX_PAYLOAD_SIZE];
+            let mut payload_len = 0u8;
+
+            if payload_ptr as usize <= data_end as usize {
+                let available = (data_end as usize - payload_ptr as usize) as usize;
+                let to_copy = core::cmp::min(available, MAX_PAYLOAD_SIZE);
+
+                // 使用 Ptr::copy_nonoverlapping 复制数据
+                if to_copy > 0 {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), to_copy);
+                    }
+                    payload_len = to_copy as u8;
+                }
+            }
+
             // 创建网络事件并通过 Perf Event Array 发送
             let event = NetworkEvent {
                 protocol: IPPROTO_UDP,
@@ -107,7 +150,9 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                 dst_port: udp_hdr.dst_port,
                 packet_size: size as u32,
                 tcp_flags: 0,
-                _pad: [0; 3],
+                payload_len,
+                _pad: [0; 2],
+                payload,
             };
 
             unsafe {
@@ -123,6 +168,26 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
             let icmp_hdr = unsafe { &*icmp_hdr_ptr };
 
+            // 计算 ICMP payload 的起始位置
+            let payload_ptr = (icmp_hdr_ptr as usize + core::mem::size_of::<IcmpHdr>()) as *const u8;
+
+            // 捕获 payload
+            let mut payload = [0u8; MAX_PAYLOAD_SIZE];
+            let mut payload_len = 0u8;
+
+            if payload_ptr as usize <= data_end as usize {
+                let available = (data_end as usize - payload_ptr as usize) as usize;
+                let to_copy = core::cmp::min(available, MAX_PAYLOAD_SIZE);
+
+                // 使用 Ptr::copy_nonoverlapping 复制数据
+                if to_copy > 0 {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(payload_ptr, payload.as_mut_ptr(), to_copy);
+                    }
+                    payload_len = to_copy as u8;
+                }
+            }
+
             // 创建网络事件并通过 Perf Event Array 发送
             let event = NetworkEvent {
                 protocol: IPPROTO_ICMP,
@@ -132,11 +197,10 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
                 dst_port: 0,
                 packet_size: size as u32,
                 tcp_flags: 0,
-                _pad: [0; 3],
+                payload_len,
+                _pad: [0; 2],
+                payload,
             };
-
-            // 忽略 ICMP type，因为 NetworkEvent 结构体中没有该字段
-            let _ = icmp_hdr.type_;
 
             unsafe {
                 EVENTS.output(&ctx, &event, 0);
