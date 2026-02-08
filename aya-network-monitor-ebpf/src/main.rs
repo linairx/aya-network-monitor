@@ -44,9 +44,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
     }
 
     // 解析 IP 头
-    let ip_hdr_ptr = unsafe {
-        (data_ptr as usize + core::mem::size_of::<EthHdr>()) as *const Ipv4Hdr
-    };
+    let ip_hdr_ptr = (data_ptr as usize + core::mem::size_of::<EthHdr>()) as *const Ipv4Hdr;
 
     if (ip_hdr_ptr as usize + core::mem::size_of::<Ipv4Hdr>()) > data_end as usize {
         return Ok(xdp_action::XDP_PASS);
@@ -62,9 +60,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
     // 解析传输层头
     match protocol {
         IPPROTO_TCP => {
-            let tcp_hdr_ptr = unsafe {
-                (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const TcpHdr
-            };
+            let tcp_hdr_ptr = (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const TcpHdr;
 
             if (tcp_hdr_ptr as usize + core::mem::size_of::<TcpHdr>()) > data_end as usize {
                 return Ok(xdp_action::XDP_PASS);
@@ -90,9 +86,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             );
         }
         IPPROTO_UDP => {
-            let udp_hdr_ptr = unsafe {
-                (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const UdpHdr
-            };
+            let udp_hdr_ptr = (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const UdpHdr;
 
             if (udp_hdr_ptr as usize + core::mem::size_of::<UdpHdr>()) > data_end as usize {
                 return Ok(xdp_action::XDP_PASS);
@@ -114,9 +108,7 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             );
         }
         IPPROTO_ICMP => {
-            let icmp_hdr_ptr = unsafe {
-                (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const IcmpHdr
-            };
+            let icmp_hdr_ptr = (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const IcmpHdr;
 
             if (icmp_hdr_ptr as usize + core::mem::size_of::<IcmpHdr>()) > data_end as usize {
                 return Ok(xdp_action::XDP_PASS);
