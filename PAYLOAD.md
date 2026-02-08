@@ -71,6 +71,11 @@ Content:
 sudo ./target/release/aya-network-monitor -i ens18 --mode protocol
 ```
 
+**⚠️ 重要提示**：对于 HTTPS 流量
+- HTTPS 服务器响应包的**源端口是 443**（不是目标端口）
+- 使用 `--src-port 443` 查看服务器响应
+- 使用 `--dst-port 443` 查看客户端请求
+
 输出示例：
 
 **HTTP 请求：**

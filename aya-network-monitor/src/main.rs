@@ -36,6 +36,10 @@ struct Opt {
     #[clap(short, long, default_value = "eth0")]
     iface: String,
 
+    /// XDP 模式: drv (驱动模式) 或 skb (SKB 模式)
+    #[clap(long, default_value = "drv")]
+    xdp_mode: String,
+
     /// 过滤协议: tcp, udp, icmp 或 all
     #[clap(long, default_value = "all")]
     protocol: String,
@@ -551,8 +555,15 @@ async fn main() -> anyhow::Result<()> {
 
     let program: &mut Xdp = ebpf.program_mut("aya_network_monitor").unwrap().try_into()?;
     program.load()?;
-    program.attach(&opt.iface, XdpFlags::default())
-        .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
+
+    // 根据 XDP 模式选择标志
+    let xdp_flags = match opt.xdp_mode.as_str() {
+        "skb" => XdpFlags::SKB_MODE,
+        "drv" | _ => XdpFlags::default(),
+    };
+
+    program.attach(&opt.iface, xdp_flags)
+        .context(format!("failed to attach the XDP program with {} mode - try the other mode (drv/skb)", opt.xdp_mode))?;
 
     info!("开始监控...");
     info!("按 Ctrl-C 停止");
