@@ -3,14 +3,18 @@
 
 use aya_ebpf::{
     bindings::xdp_action,
-    macros::xdp,
+    macros::{map, xdp},
+    maps::PerfEventArray,
     programs::XdpContext,
 };
-use aya_log_ebpf::info;
 use aya_network_monitor_common::{
-    EthHdr, Ipv4Hdr, TcpHdr, UdpHdr, IcmpHdr,
+    NetworkEvent, EthHdr, Ipv4Hdr, TcpHdr, UdpHdr, IcmpHdr,
     ETH_P_IP, IPPROTO_TCP, IPPROTO_UDP, IPPROTO_ICMP,
 };
+
+// Perf Event Array - 用于向用户空间发送结构化网络事件
+#[map]
+static mut EVENTS: PerfEventArray<NetworkEvent> = PerfEventArray::new(0);
 
 #[xdp]
 pub fn aya_network_monitor(ctx: XdpContext) -> u32 {
@@ -52,12 +56,13 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
 
     let ip_hdr = unsafe { &*ip_hdr_ptr };
     let protocol = ip_hdr.protocol;
-    let src_ip = u32::from_be(ip_hdr.src_ip);
-    let dst_ip = u32::from_be(ip_hdr.dst_ip);
-
+    let src_ip = ip_hdr.src_ip;
+    let dst_ip = ip_hdr.dst_ip;
     let ip_hdr_len = (ip_hdr.version_ihl & 0x0F) * 4;
 
-    // 解析传输层头
+    let size = data_end - data_ptr;
+
+    // 解析传输层头并发送事件到用户空间
     match protocol {
         IPPROTO_TCP => {
             let tcp_hdr_ptr = (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const TcpHdr;
@@ -67,23 +72,22 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             }
 
             let tcp_hdr = unsafe { &*tcp_hdr_ptr };
-            let src_port = u16::from_be(tcp_hdr.src_port);
-            let dst_port = u16::from_be(tcp_hdr.dst_port);
 
-            let size = data_end - data_ptr;
-            let ack = if (tcp_hdr.flags & 0x10) != 0 { 1u8 } else { 0u8 };
-            let syn = if (tcp_hdr.flags & 0x02) != 0 { 1u8 } else { 0u8 };
-            let fin = if (tcp_hdr.flags & 0x01) != 0 { 1u8 } else { 0u8 };
+            // 创建网络事件并通过 Perf Event Array 发送
+            let event = NetworkEvent {
+                protocol: IPPROTO_TCP,
+                src_ip,
+                dst_ip,
+                src_port: tcp_hdr.src_port,
+                dst_port: tcp_hdr.dst_port,
+                packet_size: size as u32,
+                tcp_flags: tcp_hdr.flags,
+                _pad: [0; 3],
+            };
 
-            let (a, b, c, d) = format_ip(src_ip);
-            let (e, f, g, h) = format_ip(dst_ip);
-
-            info!(&ctx,
-                "TCP {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} ({}b) A={} S={} F={}",
-                a, b, c, d, src_port,
-                e, f, g, h, dst_port,
-                size, ack, syn, fin
-            );
+            unsafe {
+                EVENTS.output(&ctx, &event, 0);
+            }
         }
         IPPROTO_UDP => {
             let udp_hdr_ptr = (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const UdpHdr;
@@ -93,19 +97,22 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             }
 
             let udp_hdr = unsafe { &*udp_hdr_ptr };
-            let src_port = u16::from_be(udp_hdr.src_port);
-            let dst_port = u16::from_be(udp_hdr.dst_port);
 
-            let size = data_end - data_ptr;
-            let (a, b, c, d) = format_ip(src_ip);
-            let (e, f, g, h) = format_ip(dst_ip);
+            // 创建网络事件并通过 Perf Event Array 发送
+            let event = NetworkEvent {
+                protocol: IPPROTO_UDP,
+                src_ip,
+                dst_ip,
+                src_port: udp_hdr.src_port,
+                dst_port: udp_hdr.dst_port,
+                packet_size: size as u32,
+                tcp_flags: 0,
+                _pad: [0; 3],
+            };
 
-            info!(&ctx,
-                "UDP {}.{}.{}.{}:{} -> {}.{}.{}.{}:{} ({}b)",
-                a, b, c, d, src_port,
-                e, f, g, h, dst_port,
-                size
-            );
+            unsafe {
+                EVENTS.output(&ctx, &event, 0);
+            }
         }
         IPPROTO_ICMP => {
             let icmp_hdr_ptr = (ip_hdr_ptr as usize + ip_hdr_len as usize) as *const IcmpHdr;
@@ -115,32 +122,30 @@ fn try_aya_network_monitor(ctx: XdpContext) -> Result<u32, u32> {
             }
 
             let icmp_hdr = unsafe { &*icmp_hdr_ptr };
-            let size = data_end - data_ptr;
 
-            let (a, b, c, d) = format_ip(src_ip);
-            let (e, f, g, h) = format_ip(dst_ip);
+            // 创建网络事件并通过 Perf Event Array 发送
+            let event = NetworkEvent {
+                protocol: IPPROTO_ICMP,
+                src_ip,
+                dst_ip,
+                src_port: 0,
+                dst_port: 0,
+                packet_size: size as u32,
+                tcp_flags: 0,
+                _pad: [0; 3],
+            };
 
-            info!(&ctx,
-                "ICMP {}.{}.{}.{} -> {}.{}.{}.{} (t={} {}b)",
-                a, b, c, d,
-                e, f, g, h,
-                icmp_hdr.type_,
-                size
-            );
+            // 忽略 ICMP type，因为 NetworkEvent 结构体中没有该字段
+            let _ = icmp_hdr.type_;
+
+            unsafe {
+                EVENTS.output(&ctx, &event, 0);
+            }
         }
         _ => {}
     }
 
     Ok(xdp_action::XDP_PASS)
-}
-
-fn format_ip(ip: u32) -> (u8, u8, u8, u8) {
-    (
-        (ip >> 24) as u8,
-        (ip >> 16) as u8,
-        (ip >> 8) as u8,
-        ip as u8,
-    )
 }
 
 #[cfg(not(test))]

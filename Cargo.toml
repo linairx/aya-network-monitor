@@ -9,7 +9,7 @@ default-members = ["aya-network-monitor", "aya-network-monitor-common"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
-edition = "2024"
+edition = "2021"
 
 [workspace.dependencies]
 aya = { git = "https://github.com/aya-rs/aya", default-features = false }

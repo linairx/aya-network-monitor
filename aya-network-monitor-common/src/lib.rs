@@ -67,14 +67,30 @@ pub const IPPROTO_ICMP: u8 = 1;
 // 以太网类型
 pub const ETH_P_IP: u16 = 0x0800;
 
-// 过滤配置
+// 网络事件（通过 Perf Event Array 发送到用户空间）
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
+pub struct NetworkEvent {
+    pub protocol: u8,           // IPPROTO_TCP/UDP/ICMP
+    pub src_ip: u32,            // 源 IP（网络字节序）
+    pub dst_ip: u32,            // 目标 IP（网络字节序）
+    pub src_port: u16,          // 源端口（网络字节序）
+    pub dst_port: u16,          // 目标端口（网络字节序）
+    pub packet_size: u32,       // 包大小
+    pub tcp_flags: u8,          // TCP 标志位（仅 TCP 有效）
+    pub _pad: [u8; 3],
+}
+
+// 用户空间过滤配置（通过共享 map 传递到 eBPF）
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(C)]
 pub struct FilterConfig {
-    pub filter_mode: u8,      // 0=none, 1=protocol, 2=port, 3=protocol+port, 4=ip
-    pub protocol: u8,         // 0=all, 6=TCP, 17=UDP, 1=ICMP
-    pub port: u16,            // 0=any
-    pub src_ip: u32,          // 0=any
-    pub dst_ip: u32,          // 0=any
-    pub _pad: [u8; 4],
+    pub enabled: u8,            // 是否启用过滤
+    pub protocol: u8,           // 0=所有, 6=TCP, 17=UDP, 1=ICMP
+    pub src_ip: u32,            // 0=任意
+    pub dst_ip: u32,            // 0=任意
+    pub src_port: u16,          // 0=任意
+    pub dst_port: u16,          // 0=任意
+    pub min_packet_size: u32,   // 最小包大小过滤
+    pub max_packet_size: u32,   // 最大包大小过滤
 }

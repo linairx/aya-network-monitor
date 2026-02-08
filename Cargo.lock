@@ -147,6 +147,7 @@ dependencies = [
  "aya-log",
  "aya-network-monitor-common",
  "aya-network-monitor-ebpf",
+ "bytes",
  "cargo_metadata",
  "clap",
  "env_logger",

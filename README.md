@@ -1,12 +1,25 @@
-# Aya 网络流量监控 Demo
+# Aya 网络流量监控
 
-这是一个使用 [Aya](https://github.com/aya-rs/aya) 框架编写的简单 eBPF 网络流量监控程序。
+一个使用 [Aya](https://github.com/aya-rs/aya) 框架编写的高性能 eBPF 网络流量监控程序。
 
-## 功能
+## 特性
 
-- 使用 XDP (eXpress Data Path) 在内核层面拦截网络数据包
-- 记录每个网络包的大小到日志
-- 零性能损耗，所有处理都在内核空间完成
+- 🚀 **高性能**：使用 XDP (eXpress Data Path) 在内核层面拦截网络数据包
+- 📊 **详细信息**：解析以太网、IP、TCP、UDP、ICMP 协议头
+- 🎯 **灵活过滤**：在用户空间使用 Rust 实现强大的过滤逻辑
+- 🔄 **实时监控**：通过 Perf Event Array 高效传输数据
+- ⚡ **零拷贝**：二进制数据传输，避免文本解析开销
+
+## 架构
+
+```
+┌─────────────┐
+│  eBPF 内核  │ ─→ Perf Event Array ─→ Rust 结构体 ──→ Rust 过滤逻辑
+│ (捕获数据包)  │                               (高性能二进制)
+└─────────────┘
+```
+
+详细的架构说明请参考 [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ## 前置要求
 
@@ -28,21 +41,84 @@ cargo build --release
 
 编译后的二进制文件位于: `target/release/aya-network-monitor`
 
-## 运行
+## 使用方法
 
 ⚠️ **注意**: 运行 eBPF 程序需要 **root 权限**
 
-### 基本用法
+### 基本使用
 
 ```bash
-# 监控 eth0 网卡（默认）
+# 监控所有流量（使用默认网卡 eth0）
 sudo ./target/release/aya-network-monitor
 
 # 监控指定网卡
-sudo ./target/release/aya-network-monitor -i ens33
+sudo ./target/release/aya-network-monitor -i ens18
+```
 
-# 或者使用接口全名
-sudo RUST_LOG=info ./target/release/aya-network-monitor --iface wlp3s0
+### 协议过滤
+
+```bash
+# 只监控 TCP 流量
+sudo ./target/release/aya-network-monitor -i ens18 --protocol tcp
+
+# 只监控 UDP 流量
+sudo ./target/release/aya-network-monitor -i ens18 --protocol udp
+
+# 只监控 ICMP 流量
+sudo ./target/release/aya-network-monitor -i ens18 --protocol icmp
+
+# 监控所有协议（默认）
+sudo ./target/release/aya-network-monitor -i ens18 --protocol all
+```
+
+### IP 地址过滤
+
+```bash
+# 只看来自某个 IP 的流量
+sudo ./target/release/aya-network-monitor -i ens18 --src-ip 192.168.1.100
+
+# 只看发往某个 IP 的流量
+sudo ./target/release/aya-network-monitor -i ens18 --dst-ip 8.8.8.8
+
+# 组合源和目标 IP
+sudo ./target/release/aya-network-monitor -i ens18 \
+  --src-ip 192.168.1.100 \
+  --dst-ip 8.8.8.8
+```
+
+### 端口过滤
+
+```bash
+# 只看源端口为 22 的流量（SSH）
+sudo ./target/release/aya-network-monitor -i ens18 --src-port 22
+
+# 只看目标端口为 443 的流量（HTTPS）
+sudo ./target/release/aya-network-monitor -i ens18 --dst-port 443
+
+# 只看目标端口为 80 的流量（HTTP）
+sudo ./target/release/aya-network-monitor -i ens18 --dst-port 80
+```
+
+### 组合过滤
+
+```bash
+# 监控 TCP 流量，目标端口为 443，目标 IP 为 1.1.1.1
+sudo ./target/release/aya-network-monitor -i ens18 \
+  --protocol tcp \
+  --dst-port 443 \
+  --dst-ip 1.1.1.1
+
+# 监控来自 192.168.1.100 的 SSH 连接
+sudo ./target/release/aya-network-monitor -i ens18 \
+  --protocol tcp \
+  --src-ip 192.168.1.100 \
+  --dst-port 22
+```
+
+### 查看所有选项
+
+```bash
+sudo ./target/release/aya-network-monitor --help
 ```
 
 ### 查看系统网卡
@@ -51,26 +127,96 @@ sudo RUST_LOG=info ./target/release/aya-network-monitor --iface wlp3s0
 ip addr show
 ```
 
-### 日志级别
-
-```bash
-# 只显示 info 及以上
-sudo RUST_LOG=info ./target/release/aya-network-monitor
-
-# 显示详细信息
-sudo RUST_LOG=debug ./target/release/aya-network-monitor
-```
-
 ## 输出示例
 
+### 监控所有流量
+
 ```
-[2024-02-08T12:34:56Z INFO aya_network_monitor] XDP program attached to interface: eth0
-[2024-02-08T12:34:56Z INFO aya_network_monitor] Monitoring network traffic...
-[2024-02-08T12:34:56Z INFO aya_network_monitor] Press Ctrl-C to exit
-[2024-02-08T12:35:01Z INFO aya_log_ebpf] network packet: 1514 bytes
-[2024-02-08T12:35:01Z INFO aya_log_ebpf] network packet: 60 bytes
-[2024-02-08T12:35:02Z INFO aya_log_ebpf] network packet: 1024 bytes
+═══════════════════════════════════════
+     Aya eBPF 网络流量监控工具
+═══════════════════════════════════════
+网卡: ens18
+架构: eBPF (内核) → Perf Event → 用户空间 Rust 过滤
+
+过滤配置:
+  协议: all
+═══════════════════════════════════════
+
+开始监控...
+按 Ctrl-C 停止
+
+TCP 192.168.1.100:54321 -> 93.184.216.34:443 (1248b)
+UDP 192.168.1.100:54321 -> 8.8.8.8:53 (64b)
+TCP 192.168.1.100:54322 -> 142.250.185.78:80 (1514b)
+ICMP 192.168.1.100 -> 192.168.1.1 (84b)
 ```
+
+### 只监控 TCP 端口 443
+
+```
+sudo ./target/release/aya-network-monitor -i ens18 --protocol tcp --dst-port 443
+
+═══════════════════════════════════════
+     Aya eBPF 网络流量监控工具
+═══════════════════════════════════════
+网卡: ens18
+架构: eBPF (内核) → Perf Event → 用户空间 Rust 过滤
+
+过滤配置:
+  协议: tcp
+  目标端口: 443
+═══════════════════════════════════════
+
+开始监控...
+按 Ctrl-C 停止
+
+TCP 192.168.1.100:54321 -> 93.184.216.34:443 (1248b)
+TCP 192.168.1.100:54322 -> 142.250.185.78:443 (1514b)
+```
+
+## 工作原理
+
+### XDP (eXpress Data Path)
+
+XDP 是 Linux 内核的高性能数据包处理框架：
+
+```
+Network Card
+     ↓
+  XDP Hook  ← eBPF 程序在这里拦截数据包
+     ↓
+Perf Event Array  ← 结构化数据传输到用户空间
+     ↓
+Userspace Rust  ← 过滤、格式化、显示
+     ↓
+Kernel Stack  ← 数据包继续正常处理
+```
+
+### eBPF 内核程序
+
+位于 `aya-network-monitor-ebpf/src/main.rs`:
+- 在内核空间运行
+- 拦截每个网络包
+- 解析以太网、IP、TCP/UDP/ICMP 头
+- 创建 `NetworkEvent` 结构体并通过 Perf Event Array 发送
+- 返回 `XDP_PASS` 让包继续正常处理
+
+### 用户空间程序
+
+位于 `aya-network-monitor/src/main.rs`:
+- 加载 eBPF 程序到内核
+- 将程序附加到网络接口
+- 从 Perf Event Array 读取事件
+- 应用过滤逻辑
+- 格式化并显示匹配的数据包
+
+## 性能对比
+
+| 方案 | 数据传输 | 解析开销 | 实现难度 |
+|------|---------|---------|---------|
+| 日志 + grep/awk | 中等（文本） | 高 | 简单 |
+| **Perf Event + Rust** | **低（二进制）** | **低** | 中等 |
+| eBPF 内核过滤 | 极低 | 无 | 复杂 |
 
 ## 部署到 PVE 宿主机
 
@@ -106,35 +252,6 @@ cargo build --release
 sudo ./target/release/aya-network-monitor -i vmbr0
 ```
 
-## 工作原理
-
-### XDP (eXpress Data Path)
-
-XDP 是 Linux 内核的高性能数据包处理框架：
-
-```
-Network Card
-     ↓
-  XDP Hook  ← 我们在这里！
-     ↓
-Kernel Stack
-```
-
-### eBPF 程序
-
-位于 `aya-network-monitor-ebpf/src/main.rs`:
-- 在内核空间运行
-- 拦截每个网络包
-- 记录包大小
-- 返回 `XDP_PASS` 让包继续正常处理
-
-### 用户空间程序
-
-位于 `aya-network-monitor/src/main.rs`:
-- 加载 eBPF 程序到内核
-- 将程序附加到网络接口
-- 读取 eBPF 日志并显示
-
 ## 故障排查
 
 ### 1. 权限不足
@@ -149,8 +266,12 @@ Kernel Stack
 program.attach(&iface, XdpFlags::SKB_MODE)
 ```
 
-## 相关资源
+### 4. 编译警告
+编译时可能会看到 Rust 2024 兼容性警告，这是正常的。程序使用 Rust 2021 edition 以确保与 Aya 框架的兼容性。
 
+## 相关文档
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) - 架构详细说明
 - [Aya 官方文档](https://aya-rs.dev/)
 - [XDP Tutorial](https://github.com/xdp-project/xdp-tutorial)
 - [eBPF Library](https://ebpf.io/)
